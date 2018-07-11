@@ -37,7 +37,7 @@ repositories {
 }
 ```
 
-make dependency
+Make dependency
 
 ```gradle
 compile(name:'multislider-release', ext:'aar')
