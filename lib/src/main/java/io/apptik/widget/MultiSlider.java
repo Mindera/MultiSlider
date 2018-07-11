@@ -20,7 +20,10 @@ package io.apptik.widget;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Rect;
+import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.Bundle;
@@ -40,57 +43,33 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 
-import io.apptik.widget.mslider.R;
-
-import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD;
-import static android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD;
 import static io.apptik.widget.Util.requireNonNull;
 
 public class MultiSlider extends View {
 
-    public interface OnThumbValueChangeListener {
-        /**
-         * called when thumb value has changed
-         *
-         * @param multiSlider
-         * @param thumb       the thumb which values has changes
-         * @param thumbIndex  the index of the thumb
-         * @param value       the value that has been set
-         */
-        void onValueChanged(MultiSlider multiSlider, MultiSlider.Thumb thumb, int thumbIndex, int
-                value);
-    }
-
-    public interface OnTrackingChangeListener {
-        /**
-         * This is called when the user has started touching this widget.
-         *
-         * @param multiSlider
-         * @param thumb       the thumb that has been selected
-         * @param value       the initial value of the thumb before any movement
-         */
-        void onStartTrackingTouch(MultiSlider multiSlider, MultiSlider.Thumb thumb, int value);
-
-        /**
-         * This is called when the user either releases his touch or the touch is canceled.
-         *
-         * @param multiSlider
-         * @param thumb       the thumb that has been selected
-         * @param value       the last and remaining value of the thumb after the move completes
-         */
-        void onStopTrackingTouch(MultiSlider multiSlider, MultiSlider.Thumb thumb, int value);
-    }
-
-    private AccessibilityNodeProvider mAccessibilityNodeProvider;
-    private OnThumbValueChangeListener mOnThumbValueChangeListener;
-    private OnTrackingChangeListener mOnTrackingChangeListener;
-
+    private static final int NO_ALPHA = 0xFF;
+    private static final int DEFAULT_FONT_SIZE = 40;
+    //list of all the loaded thumbs
+    private final LinkedList<Thumb> mThumbs = new LinkedList<>();
+    //thumbs that are currently being dragged
+    private final List<Thumb> mDraggingThumbs = new LinkedList<>();
+    private final TypedArray a;
     int mMinWidth;
     int mMaxWidth;
     int mMinHeight;
     int mMaxHeight;
-
+    boolean mMirrorForRtl = true;
+    /**
+     * Whether this is user seekable.
+     */
+    boolean mIsUserSeekable = true;
+    //thumbs that are currently being touched
+    LinkedList<Thumb> exactTouched = null;
+    private AccessibilityNodeProvider mAccessibilityNodeProvider;
+    private OnThumbValueChangeListener mOnThumbValueChangeListener;
+    private OnTrackingChangeListener mOnTrackingChangeListener;
     /**
      * global Min and Max
      */
@@ -99,276 +78,35 @@ public class MultiSlider extends View {
     private int mStep;
     private int mStepsThumbsApart;
     private boolean mDrawThumbsApart;
-
     private Drawable mTrack;
-
     //used in constructor to prevent invalidating before ready state
     private boolean mNoInvalidate;
     private long mUiThreadId;
-
     private boolean mInDrawing;
     private boolean mAttached;
     private boolean mRefreshIsPosted;
 
-    boolean mMirrorForRtl = true;
-
-    //list of all the loaded thumbs
-    private final LinkedList<Thumb> mThumbs = new LinkedList<>();
-
-
-    /**
-     * Whether this is user seekable.
-     */
-    boolean mIsUserSeekable = true;
+    private boolean mLabelThumb;
+    private boolean mPressedEffect;
+    private Typeface mFont;
+    private int mFontSize;
+    private int mTextColor;
+    private String mLabelFormatter;
+    private boolean mMinLabelVisible;
+    private boolean mMaxLabelVisible;
 
     /**
      * On key presses (right or left), the amount to increment/decrement the
      * progress.
      */
     private int mKeyProgressIncrement = 1;
-
-    private static final int NO_ALPHA = 0xFF;
     private float mDisabledAlpha = 0.5f;
-
     private int mScaledTouchSlop;
     private float mTouchDownX;
-    //thumbs that are currently being dragged
-    private final List<Thumb> mDraggingThumbs = new LinkedList<>();
-    //thumbs that are currently being touched
-    LinkedList<Thumb> exactTouched = null;
-
-
     private Drawable defThumbDrawable;
     private int defThumbColor = 0;
     private Drawable defRangeDrawable;
     private int defRangeColor = 0;
-
-    private final TypedArray a;
-
-    /**
-     * Thumb is the main object in MultiSlider.
-     * There could be 0, 1 or many thumbs. Each thumb has a min and max limit and a value which
-     * should always be between the limits. Each thumb defines a 'Range' the range is always
-     * between the value of the Thumb back to the previous Thumb's value or to the beginning of
-     * the track.
-     */
-    public class Thumb {
-        //abs min value for this thumb
-        int min;
-        //abs max value for this thumb
-        int max;
-        //current value of this thumb
-        int value;
-        //thumb tag. can be used for identifying the thumb
-        String tag = "thumb";
-        //thumb drawable, can be shared
-        Drawable thumb;
-        //thumb range drawable, can also be shared
-        //this is the line from the beginning or the previous thumb if any until the this one.
-        Drawable range;
-        int thumbOffset;
-
-        //cannot be moved if invisible and it is not displayed
-        private boolean isInvisible = false;
-
-        //cannot be moved if not enabled
-        private boolean isEnabled = true;
-
-        public Thumb() {
-            min = mScaleMin;
-            max = mScaleMax;
-            value = max;
-        }
-
-        /**
-         * @return the range drawable
-         */
-        public Drawable getRange() {
-            return range;
-        }
-
-        /**
-         * Set the range drawable
-         *
-         * @param range
-         * @return
-         */
-        public final Thumb setRange(Drawable range) {
-            this.range = range;
-            return this;
-        }
-
-        public boolean isEnabled() {
-            return !isInvisibleThumb() && isEnabled;
-        }
-
-        public Thumb setEnabled(boolean enabled) {
-            isEnabled = enabled;
-            if (getThumb() != null) {
-                if (isEnabled()) {
-                    getThumb().setState(new int[]{android.R.attr.state_enabled});
-                } else {
-                    getThumb().setState(new int[]{-android.R.attr.state_enabled});
-                }
-            }
-            return this;
-        }
-
-        /**
-         * @return true is the thumb is invisible, false otherwise
-         */
-        public boolean isInvisibleThumb() {
-            return isInvisible;
-        }
-
-        /**
-         * Sets thumb's visibility
-         *
-         * @param invisibleThumb
-         */
-        public void setInvisibleThumb(boolean invisibleThumb) {
-            this.isInvisible = invisibleThumb;
-        }
-
-        /**
-         * @return the minimum value a thumb can obtain depending on other thumbs before it
-         */
-        public int getPossibleMin() {
-            int res = min;
-            res += mThumbs.indexOf(this) * mStepsThumbsApart;
-            return res;
-        }
-
-        /**
-         * @return the maximum value a thumb can have depending the thumbs after it
-         */
-        public int getPossibleMax() {
-            int res = max;
-            res -= (mThumbs.size() - 1 - mThumbs.indexOf(this)) * mStepsThumbsApart;
-            return res;
-        }
-
-        /**
-         * @return the minimum value a thumb can have regardless of the thumbs after it
-         */
-        public int getMin() {
-            return min;
-        }
-
-        /**
-         * @param min the minimum value a thumb can have
-         * @return
-         */
-        public Thumb setMin(int min) {
-            if (min > this.max) {
-                min = this.max;
-            }
-            if (min < mScaleMin) {
-                min = mScaleMin;
-            }
-            if (this.min != min) {
-                this.min = min;
-                if (value < this.min) {
-                    value = this.min;
-                    invalidate();
-                }
-            }
-            return this;
-        }
-
-        /**
-         * @return the maximum value a thumb can have regardless of the thumbs after it
-         */
-        public int getMax() {
-            return max;
-        }
-
-        /**
-         * @param max he maximum value a thumb can have
-         * @return
-         */
-        public Thumb setMax(int max) {
-            if (max < this.min) {
-                max = this.min;
-            }
-            if (max > mScaleMax) {
-                max = mScaleMax;
-            }
-            if (this.max != max) {
-                this.max = max;
-                if (value > this.max) {
-                    value = this.max;
-                    invalidate();
-                }
-            }
-            return this;
-        }
-
-        /**
-         * @return Thumb's current value
-         */
-        public int getValue() {
-            return value;
-        }
-
-        /**
-         * Manually set a thumb value
-         *
-         * @param value
-         * @return
-         */
-        public Thumb setValue(int value) {
-            if (mThumbs.contains(this)) {
-                setThumbValue(this, value, false);
-            } else {
-                this.value = value;
-            }
-            return this;
-        }
-
-        public String getTag() {
-            return tag;
-        }
-
-        public Thumb setTag(String tag) {
-            this.tag = tag;
-            return this;
-        }
-
-        /**
-         * @return The thumb drawable
-         */
-        public Drawable getThumb() {
-            return thumb;
-        }
-
-        /**
-         * @param mThumb the thumb drawable
-         * @return
-         */
-        public Thumb setThumb(Drawable mThumb) {
-            this.thumb = mThumb;
-            return this;
-        }
-
-        /**
-         * @return thumb offset in pixels
-         */
-        public int getThumbOffset() {
-            return thumbOffset;
-        }
-
-        /**
-         * @param mThumbOffset thumb offset in pixels
-         * @return
-         */
-        public Thumb setThumbOffset(int mThumbOffset) {
-            this.thumbOffset = mThumbOffset;
-            return this;
-        }
-
-
-    }
 
     public MultiSlider(Context context) {
         this(context, null);
@@ -385,7 +123,7 @@ public class MultiSlider extends View {
     public MultiSlider(Context context, AttributeSet attrs, int defStyle, int styleRes) {
         super(context, attrs, defStyle);
         if ((Build.VERSION.SDK_INT >= 21) && getBackground() == null) {
-            setBackgroundResource(R.drawable.control_background_multi_material);
+            setBackgroundResource(io.apptik.widget.mslider.R.drawable.control_background_multi_material);
         }
 
         mUiThreadId = Thread.currentThread().getId();
@@ -400,7 +138,7 @@ public class MultiSlider extends View {
                 .MultiSlider_android_track);
         if (trackDrawable == null) {
             trackDrawable = ContextCompat.getDrawable(getContext(),
-                    R.drawable.multislider_track_material
+                    io.apptik.widget.mslider.R.drawable.multislider_track_material
             );
         }
 
@@ -426,7 +164,6 @@ public class MultiSlider extends View {
         setMin(a.getInt(io.apptik.widget.mslider.R.styleable.MultiSlider_scaleMin, mScaleMin),
                 true);
 
-
         mMirrorForRtl = a.getBoolean(io.apptik.widget.mslider.R.styleable.MultiSlider_mirrorForRTL,
                 mMirrorForRtl);
 
@@ -437,10 +174,10 @@ public class MultiSlider extends View {
 
         if (defThumbDrawable == null) {
             if (Build.VERSION.SDK_INT >= 21) {
-                defThumbDrawable = ContextCompat.getDrawable(getContext(), R.drawable
+                defThumbDrawable = ContextCompat.getDrawable(getContext(), io.apptik.widget.mslider.R.drawable
                         .multislider_thumb_material_anim);
             } else {
-                defThumbDrawable = ContextCompat.getDrawable(getContext(), R.drawable
+                defThumbDrawable = ContextCompat.getDrawable(getContext(), io.apptik.widget.mslider.R.drawable
                         .multislider_thumb_material);
             }
         }
@@ -449,7 +186,7 @@ public class MultiSlider extends View {
                 .MultiSlider_range);
         if (defRangeDrawable == null) {
             defRangeDrawable = ContextCompat.getDrawable(getContext(),
-                    R.drawable.multislider_range_material
+                    io.apptik.widget.mslider.R.drawable.multislider_range_material
             );
         }
 
@@ -462,6 +199,7 @@ public class MultiSlider extends View {
         defRangeColor = a.getColor(io.apptik.widget.mslider.R.styleable.MultiSlider_rangeColor, 0);
         defThumbColor = a.getColor(io.apptik.widget.mslider.R.styleable.MultiSlider_thumbColor, 0);
         setThumbDrawables(defThumbDrawable, defRangeDrawable, range1Drawable, range2Drawable); //
+
         // will
         // guess thumbOffset if
         // thumb != null...
@@ -470,6 +208,19 @@ public class MultiSlider extends View {
         int thumbOffset = a.getDimensionPixelOffset(io.apptik.widget.mslider.R.styleable
                 .MultiSlider_android_thumbOffset, defThumbDrawable.getIntrinsicWidth() / 2);
         setThumbOffset(thumbOffset);
+
+        setLabelThumb(a.getBoolean(io.apptik.widget.mslider.R.styleable.MultiSlider_labelThumb, false));
+        setTextColor(a.getColor(io.apptik.widget.mslider.R.styleable.MultiSlider_textColor, Color.BLACK));
+        setFontSize(a.getDimensionPixelSize(io.apptik.widget.mslider.R.styleable.MultiSlider_fontSize, DEFAULT_FONT_SIZE));
+        setPressedEffect(a.getBoolean(io.apptik.widget.mslider.R.styleable.MultiSlider_pressedEffect, false));
+        setLabelFormatter(a.getString(io.apptik.widget.mslider.R.styleable.MultiSlider_textFormatter));
+        setMaxLabelVisible(a.getBoolean(io.apptik.widget.mslider.R.styleable.MultiSlider_maxLabelVisible, false));
+        setMinLabelVisible(a.getBoolean(io.apptik.widget.mslider.R.styleable.MultiSlider_minLabelVisible, false));
+
+        String fontFamily = a.getString(io.apptik.widget.mslider.R.styleable.MultiSlider_fontFamily);
+        if (fontFamily != null) {
+            setFont(Typeface.create(fontFamily, styleRes));
+        }
 
         repositionThumbs();
 
@@ -552,6 +303,30 @@ public class MultiSlider extends View {
      */
     public void setOnTrackingChangeListener(OnTrackingChangeListener l) {
         mOnTrackingChangeListener = l;
+    }
+
+    public String getLabelFormatter() {
+        return mLabelFormatter;
+    }
+
+    public void setLabelFormatter(String label) {
+        this.mLabelFormatter = label;
+    }
+
+    public boolean isMinLabelVisible() {
+        return mMinLabelVisible;
+    }
+
+    public void setMinLabelVisible(boolean minLabelVisible) {
+        this.mMinLabelVisible = minLabelVisible;
+    }
+
+    public boolean isMaxLabelVisible() {
+        return mMaxLabelVisible;
+    }
+
+    public void setMaxLabelVisible(boolean maxLabelVisible) {
+        this.mMaxLabelVisible = maxLabelVisible;
     }
 
     /**
@@ -705,7 +480,6 @@ public class MultiSlider extends View {
         return thumb;
     }
 
-
     /**
      * Remove a thumb from the Slider
      *
@@ -819,7 +593,6 @@ public class MultiSlider extends View {
 
         return value;
     }
-
 
     /**
      * Refreshes the value for the specific thumb
@@ -958,16 +731,6 @@ public class MultiSlider extends View {
     }
 
     /**
-     * Sets the amount of progress changed via the arrow keys.
-     *
-     * @param increment The amount to increment or decrement when the user
-     *                  presses the arrow keys.
-     */
-    public void setKeyProgressIncrement(int increment) {
-        mKeyProgressIncrement = increment < 0 ? -increment : increment;
-    }
-
-    /**
      * Returns the amount of progress changed via the arrow keys.
      * <p/>
      * By default, this will be a value that is derived from the max progress.
@@ -980,12 +743,13 @@ public class MultiSlider extends View {
     }
 
     /**
-     * Set global maximum value and apply it to all thumbs
+     * Sets the amount of progress changed via the arrow keys.
      *
-     * @param max maximum value in scale points
+     * @param increment The amount to increment or decrement when the user
+     *                  presses the arrow keys.
      */
-    public synchronized void setMax(int max) {
-        setMax(max, true, false);
+    public void setKeyProgressIncrement(int increment) {
+        mKeyProgressIncrement = increment < 0 ? -increment : increment;
     }
 
     /**
@@ -1046,12 +810,12 @@ public class MultiSlider extends View {
     }
 
     /**
-     * Set global minimum value and apply it to all thumbs
+     * Set global maximum value and apply it to all thumbs
      *
-     * @param min minimum value in scale points
+     * @param max maximum value in scale points
      */
-    public synchronized void setMin(int min) {
-        setMin(min, true, false);
+    public synchronized void setMax(int max) {
+        setMax(max, true, false);
     }
 
     /**
@@ -1062,6 +826,46 @@ public class MultiSlider extends View {
      */
     public synchronized void setMin(int min, boolean extendMinForThumbs) {
         setMin(min, extendMinForThumbs, false);
+    }
+
+    public boolean isLabelThumb() {
+        return mLabelThumb;
+    }
+
+    public void setLabelThumb(boolean enabled) {
+        mLabelThumb = enabled;
+    }
+
+    public boolean isPressedEffect() {
+        return mPressedEffect;
+    }
+
+    public void setPressedEffect(boolean pressedEffect) {
+        this.mPressedEffect = mPressedEffect;
+    }
+
+    public Typeface getFont() {
+        return mFont;
+    }
+
+    public void setFont(Typeface mFont) {
+        this.mFont = mFont;
+    }
+
+    public int getTextColor() {
+        return mTextColor;
+    }
+
+    public void setTextColor(int textColor) {
+        this.mTextColor = textColor;
+    }
+
+    public int getFontSize() {
+        return mFontSize;
+    }
+
+    public void setFontSize(int mFontSize) {
+        this.mFontSize = mFontSize;
     }
 
     /**
@@ -1106,9 +910,17 @@ public class MultiSlider extends View {
         }
     }
 
-
     public int getMin() {
         return mScaleMin;
+    }
+
+    /**
+     * Set global minimum value and apply it to all thumbs
+     *
+     * @param min minimum value in scale points
+     */
+    public synchronized void setMin(int min) {
+        setMin(min, true, false);
     }
 
     @Override
@@ -1130,6 +942,10 @@ public class MultiSlider extends View {
     @Override
     protected void drawableStateChanged() {
         synchronized (mDraggingThumbs) {
+            if (isLabelThumb()) {
+                return;
+            }
+
             if (!mDraggingThumbs.isEmpty()) {
                 int[] state = getDrawableState();
                 for (Thumb thumb : mDraggingThumbs) {
@@ -1165,7 +981,6 @@ public class MultiSlider extends View {
 
     }
 
-
     /**
      * Updates Thumb drawable position according to the new w,h
      *
@@ -1189,7 +1004,7 @@ public class MultiSlider extends View {
 
         if (thumbHeight > trackHeight) {
             if (thumb != null) {
-                setThumbPos(w, h, thumb.getThumb(), prevThumb, thumb.getRange(), scale, 0, thumb
+                setThumbPos(w, h, thumb, prevThumb, thumb.getRange(), scale, 0, thumb
                         .getThumbOffset(), getThumbOptOffset(thumb));
             }
             int gapForCenteringTrack = (thumbHeight - trackHeight) / 2;
@@ -1209,7 +1024,7 @@ public class MultiSlider extends View {
             }
             int gap = (trackHeight - thumbHeight) / 2;
             if (thumb != null) {
-                setThumbPos(w, h, thumb.getThumb(), prevThumb, thumb.getRange(), scale, gap,
+                setThumbPos(w, h, thumb, prevThumb, thumb.getRange(), scale, gap,
                         thumb.getThumbOffset(), getThumbOptOffset(thumb));
             }
         }
@@ -1219,18 +1034,19 @@ public class MultiSlider extends View {
             int gap = (trackHeight - thumbHeight) / 2;
             scale = getScaleSize() > 0 ? (float) mThumbs.get(i).getValue() / (float) getScaleSize
                     () : 0;
-            setThumbPos(w, h, mThumbs.get(i).getThumb(), mThumbs.get(i - 1).getThumb(), mThumbs
+            setThumbPos(w, h, mThumbs.get(i), mThumbs.get(i - 1).getThumb(), mThumbs
                             .get(i).getRange(), scale, gap, mThumbs.get(i).getThumbOffset(),
                     getThumbOptOffset(mThumbs.get(i)));
         }
     }
 
-
     /**
      * @param gap If set to {@link Integer#MIN_VALUE}, this will be ignored and
      */
-    private void setThumbPos(int w, int h, Drawable thumb, Drawable prevThumb, Drawable range,
+    private void setThumbPos(int w, int h, Thumb thumbModel, Drawable prevThumb, Drawable range,
                              float scale, int gap, int thumbOffset, int optThumbOffset) {
+
+        Drawable thumb = thumbModel.getThumb();
         final int available = getAvailable();
         int thumbWidth = thumb.getIntrinsicWidth();
         int thumbHeight = thumb.getIntrinsicHeight();
@@ -1256,6 +1072,7 @@ public class MultiSlider extends View {
                 available - thumbPos + optThumbOffset : thumbPos + optThumbOffset;
 
         thumb.setBounds(thumbStart, topBound, thumbStart + thumbWidth, bottomBound);
+        thumbModel.setThumbStart(thumbStart);
 
         int bottom = h - getPaddingTop() + getPaddingBottom();
 
@@ -1300,6 +1117,26 @@ public class MultiSlider extends View {
             if (thumb.getRange() != null) {
                 canvas.save();
                 canvas.translate(paddingStart, getPaddingTop() - getPaddingBottom());
+
+                if (shouldShowLabel(thumb)) {
+
+                    String label =
+                            (getLabelFormatter() == null) ?
+                                    String.valueOf(thumb.getValue()) :
+                                    String.format(Locale.getDefault(), getLabelFormatter(), thumb.getValue());
+
+                    Paint paint = new Paint();
+                    paint.setStyle(Paint.Style.FILL);
+                    paint.setColor(getTextColor());
+                    paint.setTextSize(getFontSize());
+
+                    Rect rectText = new Rect();
+                    paint.getTextBounds(label, 0, label.length(), rectText);
+
+                    canvas.drawText(label, thumb.thumbStart - rectText.width() / 2, rectText.height(), paint);
+
+                }
+
                 thumb.getRange().draw(canvas);
                 canvas.restore();
             }
@@ -1317,6 +1154,23 @@ public class MultiSlider extends View {
                 canvas.restore();
             }
         }
+    }
+
+    private boolean shouldShowLabel(Thumb thumb) {
+        if (!isLabelThumb()) {
+            return false;
+        }
+
+        if (thumb.getPossibleMax() == thumb.getValue() && !isMaxLabelVisible()) {
+            return false;
+        }
+
+        if (thumb.getPossibleMin() == thumb.getValue() && !isMinLabelVisible()) {
+            return false;
+        }
+
+        return true;
+
     }
 
     @Override
@@ -1346,7 +1200,6 @@ public class MultiSlider extends View {
         setMeasuredDimension(resolveSizeAndState(dw, widthMeasureSpec, 0),
                 resolveSizeAndState(dh, heightMeasureSpec, 0));
     }
-
 
     public boolean isInScrollingContainer() {
         ViewParent p = getParent();
@@ -1700,10 +1553,47 @@ public class MultiSlider extends View {
         return mOnThumbValueChangeListener != null;
     }
 
-    //
-
     private boolean hasOnTrackingChangeListener() {
         return mOnTrackingChangeListener != null;
+    }
+
+    @Override
+    public AccessibilityNodeProvider getAccessibilityNodeProvider() {
+        if (mAccessibilityNodeProvider == null) {
+            mAccessibilityNodeProvider = new VirtualTreeProvider();
+        }
+        return mAccessibilityNodeProvider;
+    }
+
+    //
+    @Override
+    public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
+        super.onInitializeAccessibilityNodeInfo(info);
+        info.setClassName(MultiSlider.class.getName());
+    }
+
+    //
+
+    @Override
+    public void onRtlPropertiesChanged(int layoutDirection) {
+        if (Build.VERSION.SDK_INT >= 17) {
+            super.onRtlPropertiesChanged(layoutDirection);
+            invalidate();
+        }
+//
+//        int max = getMax();
+//        float scale = max > 0 ? (float) getProgress() / (float) max : 0;
+//
+//        Drawable thumb = mThumb;
+//        if (thumb != null) {
+//            setThumbPos(getWidth(), thumb, scale, Integer.MIN_VALUE);
+//            /*
+//             * Since we draw translated, the drawable's bounds that it signals
+//             * for invalidation won't be the actual bounds we want invalidated,
+//             * so just invalidate this whole view.
+//             */
+//            invalidate();
+//        }
     }
 
 //   void onKeyChange() {
@@ -1730,44 +1620,6 @@ public class MultiSlider extends View {
 //
 //        return super.onKeyDown(keyCode, event);
 //    }
-
-
-    @Override
-    public AccessibilityNodeProvider getAccessibilityNodeProvider() {
-        if (mAccessibilityNodeProvider == null) {
-            mAccessibilityNodeProvider = new VirtualTreeProvider();
-        }
-        return mAccessibilityNodeProvider;
-    }
-
-    //
-    @Override
-    public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
-        super.onInitializeAccessibilityNodeInfo(info);
-        info.setClassName(MultiSlider.class.getName());
-    }
-
-    @Override
-    public void onRtlPropertiesChanged(int layoutDirection) {
-        if (Build.VERSION.SDK_INT >= 17) {
-            super.onRtlPropertiesChanged(layoutDirection);
-            invalidate();
-        }
-//
-//        int max = getMax();
-//        float scale = max > 0 ? (float) getProgress() / (float) max : 0;
-//
-//        Drawable thumb = mThumb;
-//        if (thumb != null) {
-//            setThumbPos(getWidth(), thumb, scale, Integer.MIN_VALUE);
-//            /*
-//             * Since we draw translated, the drawable's bounds that it signals
-//             * for invalidation won't be the actual bounds we want invalidated,
-//             * so just invalidate this whole view.
-//             */
-//            invalidate();
-//        }
-    }
 
     public boolean isLayoutRtl() {
         if (Build.VERSION.SDK_INT >= 17) {
@@ -1809,6 +1661,39 @@ public class MultiSlider extends View {
         return drawable;
     }
 
+    public interface OnThumbValueChangeListener {
+        /**
+         * called when thumb value has changed
+         *
+         * @param multiSlider
+         * @param thumb       the thumb which values has changes
+         * @param thumbIndex  the index of the thumb
+         * @param value       the value that has been set
+         */
+        void onValueChanged(MultiSlider multiSlider, MultiSlider.Thumb thumb, int thumbIndex, int
+                value);
+    }
+
+    public interface OnTrackingChangeListener {
+        /**
+         * This is called when the user has started touching this widget.
+         *
+         * @param multiSlider
+         * @param thumb       the thumb that has been selected
+         * @param value       the initial value of the thumb before any movement
+         */
+        void onStartTrackingTouch(MultiSlider multiSlider, MultiSlider.Thumb thumb, int value);
+
+        /**
+         * This is called when the user either releases his touch or the touch is canceled.
+         *
+         * @param multiSlider
+         * @param thumb       the thumb that has been selected
+         * @param value       the last and remaining value of the thumb after the move completes
+         */
+        void onStopTrackingTouch(MultiSlider multiSlider, MultiSlider.Thumb thumb, int value);
+    }
+
     /**
      * Void listener helper
      */
@@ -1828,6 +1713,235 @@ public class MultiSlider extends View {
         public void onStopTrackingTouch(MultiSlider multiSlider, Thumb thumb, int value) {
         }
 
+    }
+
+    /**
+     * Thumb is the main object in MultiSlider.
+     * There could be 0, 1 or many thumbs. Each thumb has a min and max limit and a value which
+     * should always be between the limits. Each thumb defines a 'Range' the range is always
+     * between the value of the Thumb back to the previous Thumb's value or to the beginning of
+     * the track.
+     */
+    public class Thumb {
+        //abs min value for this thumb
+        int min;
+        //abs max value for this thumb
+        int max;
+        //current value of this thumb
+        int value;
+        //thumb tag. can be used for identifying the thumb
+        String tag = "thumb";
+        //thumb drawable, can be shared
+        Drawable thumb;
+        //thumb range drawable, can also be shared
+        //this is the line from the beginning or the previous thumb if any until the this one.
+        Drawable range;
+        int thumbOffset;
+
+        //cannot be moved if invisible and it is not displayed
+        private boolean isInvisible = false;
+
+        //cannot be moved if not enabled
+        private boolean isEnabled = true;
+        private int thumbStart;
+
+        public Thumb() {
+            min = mScaleMin;
+            max = mScaleMax;
+            value = max;
+        }
+
+        /**
+         * @return the range drawable
+         */
+        public Drawable getRange() {
+            return range;
+        }
+
+        /**
+         * Set the range drawable
+         *
+         * @param range
+         * @return
+         */
+        public final Thumb setRange(Drawable range) {
+            this.range = range;
+            return this;
+        }
+
+        public boolean isEnabled() {
+            return !isInvisibleThumb() && isEnabled;
+        }
+
+        public Thumb setEnabled(boolean enabled) {
+            isEnabled = enabled;
+            if (getThumb() != null) {
+                if (isEnabled()) {
+                    getThumb().setState(new int[]{android.R.attr.state_enabled});
+                } else {
+                    getThumb().setState(new int[]{-android.R.attr.state_enabled});
+                }
+            }
+            return this;
+        }
+
+        /**
+         * @return true is the thumb is invisible, false otherwise
+         */
+        public boolean isInvisibleThumb() {
+            return isInvisible;
+        }
+
+        /**
+         * Sets thumb's visibility
+         *
+         * @param invisibleThumb
+         */
+        public void setInvisibleThumb(boolean invisibleThumb) {
+            this.isInvisible = invisibleThumb;
+        }
+
+        /**
+         * @return the minimum value a thumb can obtain depending on other thumbs before it
+         */
+        public int getPossibleMin() {
+            int res = min;
+            res += mThumbs.indexOf(this) * mStepsThumbsApart;
+            return res;
+        }
+
+        /**
+         * @return the maximum value a thumb can have depending the thumbs after it
+         */
+        public int getPossibleMax() {
+            int res = max;
+            res -= (mThumbs.size() - 1 - mThumbs.indexOf(this)) * mStepsThumbsApart;
+            return res;
+        }
+
+        /**
+         * @return the minimum value a thumb can have regardless of the thumbs after it
+         */
+        public int getMin() {
+            return min;
+        }
+
+        /**
+         * @param min the minimum value a thumb can have
+         * @return
+         */
+        public Thumb setMin(int min) {
+            if (min > this.max) {
+                min = this.max;
+            }
+            if (min < mScaleMin) {
+                min = mScaleMin;
+            }
+            if (this.min != min) {
+                this.min = min;
+                if (value < this.min) {
+                    value = this.min;
+                    invalidate();
+                }
+            }
+            return this;
+        }
+
+        /**
+         * @return the maximum value a thumb can have regardless of the thumbs after it
+         */
+        public int getMax() {
+            return max;
+        }
+
+        /**
+         * @param max he maximum value a thumb can have
+         * @return
+         */
+        public Thumb setMax(int max) {
+            if (max < this.min) {
+                max = this.min;
+            }
+            if (max > mScaleMax) {
+                max = mScaleMax;
+            }
+            if (this.max != max) {
+                this.max = max;
+                if (value > this.max) {
+                    value = this.max;
+                    invalidate();
+                }
+            }
+            return this;
+        }
+
+        /**
+         * @return Thumb's current value
+         */
+        public int getValue() {
+            return value;
+        }
+
+        /**
+         * Manually set a thumb value
+         *
+         * @param value
+         * @return
+         */
+        public Thumb setValue(int value) {
+            if (mThumbs.contains(this)) {
+                setThumbValue(this, value, false);
+            } else {
+                this.value = value;
+            }
+            return this;
+        }
+
+        public String getTag() {
+            return tag;
+        }
+
+        public Thumb setTag(String tag) {
+            this.tag = tag;
+            return this;
+        }
+
+        /**
+         * @return The thumb drawable
+         */
+        public Drawable getThumb() {
+            return thumb;
+        }
+
+        /**
+         * @param mThumb the thumb drawable
+         * @return
+         */
+        public Thumb setThumb(Drawable mThumb) {
+            this.thumb = mThumb;
+            return this;
+        }
+
+        /**
+         * @return thumb offset in pixels
+         */
+        public int getThumbOffset() {
+            return thumbOffset;
+        }
+
+        /**
+         * @param mThumbOffset thumb offset in pixels
+         * @return
+         */
+        public Thumb setThumbOffset(int mThumbOffset) {
+            this.thumbOffset = mThumbOffset;
+            return this;
+        }
+
+
+        public void setThumbStart(int thumbStart) {
+            this.thumbStart = thumbStart;
+        }
     }
 
     class VirtualTreeProvider extends AccessibilityNodeProvider {
@@ -1862,8 +1976,8 @@ public class MultiSlider extends View {
                     info.setScrollable(true);
                     if (Build.VERSION.SDK_INT >= 21) {
                         info.addAction(ACTION_SET_PROGRESS);
-                        info.addAction(ACTION_SCROLL_BACKWARD);
-                        info.addAction(ACTION_SCROLL_FORWARD);
+                        info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD);
+                        info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD);
                     } else {
                         info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
                         info.addAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
@@ -1888,10 +2002,10 @@ public class MultiSlider extends View {
                 if (Build.VERSION.SDK_INT >= 21) {
                     info.addAction(ACTION_SET_PROGRESS);
                     if (thumb.getPossibleMax() > thumb.value) {
-                        info.addAction(ACTION_SCROLL_BACKWARD);
+                        info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_BACKWARD);
                     }
                     if (thumb.getPossibleMax() > thumb.value) {
-                        info.addAction(ACTION_SCROLL_FORWARD);
+                        info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD);
                     }
 
                 } else {

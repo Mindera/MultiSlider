@@ -105,7 +105,15 @@
             android:id="@+id/range_slider2"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-
+            android:thumb="@drawable/thumb_selector"
+            app:fontFamily="sans-serif-medium"
+            app:pressedEffect="false"
+            app:labelThumb="true"
+            app:minLabelVisible="false"
+            app:maxLabelVisible="false"
+            app:fontSize="20sp"
+            app:textColor="#F00"
+            app:textFormatter="£%d"
             app:range1="@drawable/example_scrubber_secondary_holo"
             app:range2="@drawable/example_scrubber_primary_holo"
             />
