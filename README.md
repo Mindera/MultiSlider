@@ -13,7 +13,38 @@ MultiSlider is extremely easy to use while still very flexible and customizable.
 
 Developer can customize many features from XML layout or programmatically.
 
-## Download
+## Compiling updated aar file
+
+Create lib path
+
+```
+yourmodule/lib
+```
+
+Move this [artifact][artifact] to your directory
+
+```
+yourmodule/lib/multislider-release.aar
+```
+ 
+make reference in gradlew file
+
+```gradle
+repositories {
+    flatDir {
+        dirs 'libs'
+    }
+}
+```
+
+make dependency
+
+```gradle
+compile(name:'multislider-release', ext:'aar')
+```
+
+
+## Download from original library
 
 Find [the latest AARs][mvn] or grab via Maven:
 
@@ -242,4 +273,4 @@ Thanks for your contributions!
 [mvn]: http://search.maven.org/#search|ga|1|io.apptik.widget.multislider
 [release]: https://oss.sonatype.org/content/repositories/releases/io/apptik/widget/multislider/
 [snap]: https://oss.sonatype.org/content/repositories/snapshots/io/apptik/widget/multislider/
- 
+ [artifact]: /lib/artifact/1.3/
