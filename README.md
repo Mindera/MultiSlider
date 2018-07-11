@@ -27,7 +27,7 @@ Move this [artifact][artifact] to your directory
 yourmodule/lib/multislider-release.aar
 ```
  
-make reference in gradlew file
+Make reference in gradlew file
 
 ```gradle
 repositories {
